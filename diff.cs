@@ -3,206 +3,100 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 
-public class ConfigDiff
+class Program
 {
-    public static void Main(string[] args)
+    static void Main(string[] args)
     {
-        if (args.Length < 3)
+        // フォルダと設定を定義
+        string helpFolder = "help";
+        string[] targetFolders = { "folder1", "folder2", "folder3" };
+        Dictionary<string, object> pathMatchSetting = new Dictionary<string, object>
         {
-            Console.WriteLine("Usage: ConfigDiff <help_folder> <config_folder1> <config_folder2> ...");
-            return;
-        }
+            { "filter", "*.ini" },
+            { "ignore_string", new List<string> { "AJCD+", "DJCD+" } }
+        };
 
-        string helpFolder = args[0];
-        string[] configFolders = args.Skip(1).ToArray();
-
-        List<DiffResult> results = CompareConfigs(helpFolder, configFolders);
-
-        WriteResultsToCsv("result.csv", results);
+        // フォルダを比較
+        var result = CompareFolders(pathMatchSetting, helpFolder, targetFolders);
+        
+        // 結果をCSVに保存
+        File.WriteAllLines("result.csv", result);
+        
+        // 終了メッセージ
+        Console.WriteLine("比較処理が完了しました。result.csv を確認してください。");
     }
 
-    public static List<DiffResult> CompareConfigs(string helpFolder, string[] configFolders)
+    static List<string> CompareFolders(Dictionary<string, object> settings, string helpFolder, string[] folders)
     {
-        List<DiffResult> results = new List<DiffResult>();
-
-        var allConfigFiles = configFolders.SelectMany(folder => Directory.GetFiles(folder)).Select(Path.GetFileName).Distinct();
-
-        foreach (var configFile in allConfigFiles)
+        var result = new List<string>();
+        var fileGroups = GetMatchingFiles(settings, folders);
+        
+        foreach (var group in fileGroups)
         {
-            string helpFilePath = Path.Combine(helpFolder, configFile + ".csv");
-            Dictionary<string, HelpItem> helpData = LoadHelpData(helpFilePath);
-
-            Dictionary<string, Dictionary<string, List<string>>>[] configData = configFolders
-                .Select(folder => LoadConfigData(Path.Combine(folder, configFile)))
-                .ToArray();
-
-            results.AddRange(CompareFiles(configFile, helpData, configData));
+            var helpFile = Path.Combine(helpFolder, group.Key + ".csv");
+            var helpData = File.Exists(helpFile) ? ParseCsv(helpFile) : new Dictionary<string, string>();
+            result.AddRange(CompareFiles(group.Value, helpData));
         }
-
-        return results;
+        return result;
     }
 
-    public static Dictionary<string, HelpItem> LoadHelpData(string filePath)
+    static Dictionary<string, List<string>> GetMatchingFiles(Dictionary<string, object> settings, string[] folders)
     {
-        Dictionary<string, HelpItem> helpData = new Dictionary<string, HelpItem>();
+        var fileGroups = new Dictionary<string, List<string>>();
+        string filter = settings.ContainsKey("filter") ? settings["filter"].ToString() : "*.*";
+        var ignoreList = settings.ContainsKey("ignore_string") ? (List<string>)settings["ignore_string"] : new List<string>();
 
-        if (!File.Exists(filePath))
+        foreach (var folder in folders)
         {
-            return helpData;
-        }
-
-        foreach (string line in File.ReadLines(filePath).Skip(1))
-        {
-            string[] parts = line.Split(',');
-            if (parts.Length >= 4)
+            if (!Directory.Exists(folder)) continue;
+            var files = Directory.GetFiles(folder, filter).Where(f => !ignoreList.Any(i => f.Contains(i)));
+            foreach (var file in files)
             {
-                string group = parts[0].Trim('"');
-                string key = parts[1].Trim('"');
-                string help = parts[2].Trim('"');
-                string defaultValue = parts[3].Trim('"');
-
-                helpData[GetKey(group, key)] = new HelpItem(group, key, help, defaultValue);
+                string name = Path.GetFileName(file);
+                if (!fileGroups.ContainsKey(name))
+                    fileGroups[name] = new List<string>();
+                fileGroups[name].Add(file);
             }
         }
-
-        return helpData;
+        return fileGroups;
     }
 
-    public static Dictionary<string, Dictionary<string, List<string>>> LoadConfigData(string filePath)
+    static List<string> CompareFiles(List<string> files, Dictionary<string, string> helpData)
     {
-        Dictionary<string, Dictionary<string, List<string>>> configData = new Dictionary<string, Dictionary<string, List<string>>>();
-        string currentGroup = "";
+        var result = new List<string>();
+        var data = files.Select(ParseIniFile).ToList();
+        var allKeys = data.SelectMany(d => d.Keys).Distinct();
 
-        if (!File.Exists(filePath))
+        foreach (var key in allKeys)
         {
-            return configData;
+            var values = data.Select(d => d.ContainsKey(key) ? d[key] : "N/A").ToArray();
+            string helpText = helpData.ContainsKey(key) ? helpData[key] : "";
+            result.Add(key+","+helpText+","+string.Join(",", values)+"}");
         }
-
-        foreach (string line in File.ReadLines(filePath))
-        {
-            string trimmedLine = line.Trim();
-            if (trimmedLine.StartsWith(";"))
-            {
-                continue;
-            }
-
-            if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
-            {
-                currentGroup = trimmedLine.Substring(1, trimmedLine.Length - 2);
-                if (!configData.ContainsKey(currentGroup))
-                {
-                    configData[currentGroup] = new Dictionary<string, List<string>>();
-                }
-                continue;
-            }
-
-            string[] parts = trimmedLine.Split('=', 2);
-            if (parts.Length == 2)
-            {
-                string key = parts[0].Trim();
-                string value = parts[1].Trim();
-
-                if (!configData.ContainsKey(currentGroup))
-                {
-                    configData[currentGroup] = new Dictionary<string, List<string>>();
-                }
-
-                if (!configData[currentGroup].ContainsKey(key))
-                {
-                    configData[currentGroup][key] = new List<string>();
-                }
-                configData[currentGroup][key].Add(value);
-            }
-        }
-
-        return configData;
+        return result;
     }
 
-    public static List<DiffResult> CompareFiles(string fileName, Dictionary<string, HelpItem> helpData, Dictionary<string, Dictionary<string, List<string>>>[] configData)
+    static Dictionary<string, string> ParseIniFile(string path)
     {
-        List<DiffResult> results = new List<DiffResult>();
-
-        var allKeys = configData.SelectMany(data => data.Keys.SelectMany(group => data[group].Keys).Select(key => new { Group = data.Keys.FirstOrDefault(g => data[g].ContainsKey(key)), Key = key })).Distinct();
-
-        foreach (var item in allKeys)
+        var result = new Dictionary<string, string>();
+        foreach (var line in File.ReadLines(path))
         {
-            string group = item.Group ?? "";
-            string key = item.Key;
-            string fullKey = GetKey(group, key);
-
-            HelpItem helpItem = helpData.GetValueOrDefault(fullKey);
-
-            List<List<string>> values = configData.Select(data => data.GetValueOrDefault(group)?.GetValueOrDefault(key) ?? new List<string>()).ToList();
-            bool hasDiff = !values.Skip(1).All(v => v.SequenceEqual(values[0]));
-
-            results.Add(new DiffResult(fileName, group, key, helpItem?.Help, hasDiff, helpItem?.DefaultValue, values));
+            if (line.StartsWith(";") || !line.Contains("=")) continue;
+            var parts = line.Split(new[] { '=' }, 2);
+            result[parts[0].Trim()] = parts[1].Trim();
         }
-
-        for (int i = 0; i < configData.Length; i++)
-        {
-            if (configData[i].Count == 0)
-            {
-                results.Add(new DiffResult(fileName, "", "", "險ｭ螳壹ヵ繧｡繧､繝ｫ縺悟ｭ伜惠縺励∪縺帙ｓ", true, "", new List<List<string>>()));
-            }
-        }
-
-        return results;
+        return result;
     }
 
-    public static void WriteResultsToCsv(string filePath, List<DiffResult> results)
+    static Dictionary<string, string> ParseCsv(string path)
     {
-        using (StreamWriter writer = new StreamWriter(filePath))
+        var result = new Dictionary<string, string>();
+        foreach (var line in File.ReadLines(path).Skip(1))
         {
-            writer.WriteLine("Group,Item,Help,Diff,Default,Value1,Value2,Value3");
-
-            foreach (var result in results)
-            {
-                string values = string.Join(",", result.Values.Select(v => string.Join(";", v)));
-                writer.WriteLine("result.Group+","+result.Key+","+result.Help+","+result.HasDiff+","+result.DefaultValue+","+values);
-            }
+            var parts = line.Split(',');
+            if (parts.Length < 3) continue;
+            result[parts[1].Trim()] = parts[2].Trim();
         }
-    }
-
-    public static string GetKey(string group, string key)
-    {
-        return string.IsNullOrEmpty(group) ? key : group+"."+key;
-    }
-
-    public class HelpItem
-    {
-        public string Group { get; }
-        public string Key { get; }
-        public string Help { get; }
-        public string DefaultValue { get; }
-
-        public HelpItem(string group, string key, string help, string defaultValue)
-        {
-            Group = group;
-            Key = key;
-            Help = help;
-            DefaultValue = defaultValue;
-        }
-    }
-
-    public class DiffResult
-    {
-        public string FileName { get; }
-        public string Group { get; }
-        public string Key { get; }
-        public string Help { get; }
-        public bool HasDiff { get; }
-        public string DefaultValue { get; }
-        public List<List<string>> Values { get; }
-
-        public DiffResult(string fileName, string group, string key, string help, bool hasDiff, string defaultValue, List<List<string>> values)
-        {
-            FileName = fileName;
-            Group = group;
-            Key = key;
-            Help = help;
-            HasDiff = hasDiff;
-            DefaultValue = defaultValue;
-            Values = values;
-        }
+        return result;
     }
 }
