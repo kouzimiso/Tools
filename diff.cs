@@ -230,7 +230,7 @@ namespace ConfigSettingDiff
                     string helpText = helpDict.ContainsKey(dictKey) ? helpDict[dictKey].HelpText : "";
                     string defaultVal = helpDict.ContainsKey(dictKey) ? helpDict[dictKey].Default : "";
                     // CSVの１行を作成：file_path, group, item, help, result, default, 各データの値…
-                    string row = string.Format("{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}",//"{0},{1},{2},{3},{4},{5},{6}",
+                    string row = string.Format("{0},{1},{2},{3},{4},{5},{6}",
                                     fileName,
                                     group,
                                     key,

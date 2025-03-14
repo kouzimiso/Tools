@@ -1,0 +1,13 @@
+{
+    "filter": "*.ini",
+    "ignore_string": [
+        "AJCD+", 
+        "DJCD+"
+    ],
+    "mismatch_log": "missmatch.log",
+    "help_folder_path":"../test/TestHelp",
+    "diff_folder_path": [ 
+        "../test/TestSetting1",      
+        "../test/TestSetting2"
+    ]
+}
